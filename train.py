@@ -16,9 +16,9 @@ from pathlib import Path
 # Huggingface datasets and tokenizers
 from datasets import load_dataset
 from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.trainers import WordLevelTrainer
-from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.models import WordLevel  # one of tokenizer for convert input text to ids
+from tokenizers.trainers import WordLevelTrainer  # trainer for tokenizers
+from tokenizers.pre_tokenizers import Whitespace 
 
 import torchmetrics
 from torch.utils.tensorboard import SummaryWriter
@@ -122,16 +122,19 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
         writer.flush()
 
 def get_all_sentences(ds, lang):
+    # only etract the language we need
     for item in ds:
         yield item['translation'][lang]
 
 def get_or_build_tokenizer(config, ds, lang):
+    # ds: dataset to build the tokenizer from
+    # RECALL: tokenizer is the model that converts input text to ids
     tokenizer_path = Path(config['tokenizer_file'].format(lang))
     if not Path.exists(tokenizer_path):
         # Most code taken from: https://huggingface.co/docs/tokenizers/quicktour
-        tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
-        tokenizer.pre_tokenizer = Whitespace()
-        trainer = WordLevelTrainer(special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"], min_frequency=2)
+        tokenizer = Tokenizer(WordLevel(unk_token="[UNK]")) # replace all unknown tokens with [UNK]
+        tokenizer.pre_tokenizer = Whitespace()  # split the input text into words based on whitespace, will not split word into different tokens
+        trainer = WordLevelTrainer(special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"], min_frequency=2) # : only include words that occur ≥2 times in the training data
         tokenizer.train_from_iterator(get_all_sentences(ds, lang), trainer=trainer)
         tokenizer.save(str(tokenizer_path))
     else:
@@ -169,7 +172,7 @@ def get_ds(config):
     
 
     train_dataloader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True)
-    val_dataloader = DataLoader(val_ds, batch_size=1, shuffle=True)
+    val_dataloader = DataLoader(val_ds, batch_size=1, shuffle=True) # process each sentence 1 by 1 for validation
 
     return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
 
@@ -178,19 +181,55 @@ def get_model(config, vocab_src_len, vocab_tgt_len):
     return model
 
 def train_model(config):
+    # # Define the device
+    # if torch.cuda.is_available():
+    #     device = "cuda"
+    # elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    #     device = "mps"
+    # else:
+    #     device = "cpu"
+    # print("Using device:", device)
+    # if device == 'cuda':
+    #     print(f"Device name: {torch.cuda.get_device_name(0)}")
+    #     print(f"Device memory: {torch.cuda.get_device_properties(0).total_memory / 1024 ** 3} GB")
+    # elif device == 'mps':
+    #     print(f"Device name: <mps>")
+    # else:
+    #     print("NOTE: If you have a GPU, consider using it for training.")
+    #     print("      On a Windows machine with NVidia GPU, check this video: https://www.youtube.com/watch?v=GMSjDTU8Zlc")
+    #     print("      On a Mac machine, run: pip3 install --pre torch torchvision torchaudio torchtext --index-url https://download.pytorch.org/whl/nightly/cpu")
+    # device = torch.device(device)
+
     # Define the device
-    device = "cuda" if torch.cuda.is_available() else "mps" if torch.has_mps or torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        if torch.version.hip is not None:
+            device = "hip"  # AMD GPU via ROCm
+        else:
+            device = "cuda"  # NVIDIA GPU
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"  # Apple Silicon
+    else:
+        device = "cpu"
+
+    # Print device info
     print("Using device:", device)
-    if (device == 'cuda'):
-        print(f"Device name: {torch.cuda.get_device_name(device.index)}")
-        print(f"Device memory: {torch.cuda.get_device_properties(device.index).total_memory / 1024 ** 3} GB")
-    elif (device == 'mps'):
-        print(f"Device name: <mps>")
+
+    if device == 'cuda':
+        print(f"Device name: {torch.cuda.get_device_name(0)}")
+        print(f"Device memory: {torch.cuda.get_device_properties(0).total_memory / 1024 ** 3:.2f} GB")
+    elif device == 'hip':
+        print(f"AMD GPU via ROCm detected")
+        print(f"Device name: {torch.cuda.get_device_name(0)}")
+        print(f"Device memory: {torch.cuda.get_device_properties(0).total_memory / 1024 ** 3:.2f} GB")
+    elif device == 'mps':
+        print("Device name: Apple MPS (Metal Performance Shaders)")
     else:
         print("NOTE: If you have a GPU, consider using it for training.")
         print("      On a Windows machine with NVidia GPU, check this video: https://www.youtube.com/watch?v=GMSjDTU8Zlc")
         print("      On a Mac machine, run: pip3 install --pre torch torchvision torchaudio torchtext --index-url https://download.pytorch.org/whl/nightly/cpu")
-    device = torch.device(device)
+
+    # Set the PyTorch device object
+    device = torch.device("cuda" if device in ["cuda", "hip"] else device)
 
     # Make sure the weights folder exists
     Path(f"{config['datasource']}_{config['model_folder']}").mkdir(parents=True, exist_ok=True)
@@ -208,7 +247,7 @@ def train_model(config):
     preload = config['preload']
     model_filename = latest_weights_file_path(config) if preload == 'latest' else get_weights_file_path(config, preload) if preload else None
     if model_filename:
-        print(f'Preloading model {model_filename}')
+        print(f'Preloading model {model_filename}')  # weight save before during training
         state = torch.load(model_filename)
         model.load_state_dict(state['model_state_dict'])
         initial_epoch = state['epoch'] + 1
@@ -217,10 +256,11 @@ def train_model(config):
     else:
         print('No model to preload, starting from scratch')
 
-    loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer_src.token_to_id('[PAD]'), label_smoothing=0.1).to(device)
+    loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer_src.token_to_id('[PAD]'), label_smoothing=0.1).to(device) 
 
     for epoch in range(initial_epoch, config['num_epochs']):
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         model.train()
         batch_iterator = tqdm(train_dataloader, desc=f"Processing Epoch {epoch:02d}")
         for batch in batch_iterator:
