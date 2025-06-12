@@ -5,11 +5,11 @@ def get_config():
         "batch_size": 8,
         "num_epochs": 20,
         "lr": 10**-4,
-        "seq_len": 350,
+        "seq_len": 800,
         "d_model": 512,
         "datasource": 'opus_books',
         "lang_src": "en",
-        "lang_tgt": "it",
+        "lang_tgt": "es", # spanish
         "model_folder": "weights",
         "model_basename": "tmodel_",
         "preload": "latest",
